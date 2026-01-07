@@ -6,6 +6,11 @@ Run this to fetch all modules after cloning:
 git submodule update --init --recursive
 ```
 
+to compile all modules in one go
+```sh
+./compile.sh
+```
+
 ## Modules
 
 | Path | Repository |
