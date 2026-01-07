@@ -10,12 +10,6 @@
 [submodule "logos-irc-module"]
 	path = logos-irc-module
 	url = https://github.com/logos-co/logos-irc-module
-[submodule "logos-template-module"]
-	path = logos-template-module
-	url = https://github.com/logos-co/logos-template-module
-[submodule "logos-simple-module"]
-	path = logos-simple-module
-	url = https://github.com/logos-co/logos-simple-module
 [submodule "logos-package-manager"]
 	path = logos-package-manager
 	url = https://github.com/logos-co/logos-package-manager

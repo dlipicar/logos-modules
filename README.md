@@ -14,8 +14,6 @@ git submodule update --init --recursive
 | logos-wallet-module | https://github.com/logos-co/logos-wallet-module |
 | logos-chat-module | https://github.com/logos-co/logos-chat-module |
 | logos-irc-module | https://github.com/logos-co/logos-irc-module |
-| logos-template-module | https://github.com/logos-co/logos-template-module |
-| logos-simple-module | https://github.com/logos-co/logos-simple-module |
 | logos-package-manager | https://github.com/logos-co/logos-package-manager |
 | logos-capability-module | https://github.com/logos-co/logos-capability-module |
 | logos-accounts-module | https://github.com/logos-co/logos-accounts-module |
