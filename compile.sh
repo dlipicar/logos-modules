@@ -55,7 +55,22 @@ print(json.dumps(entries))
 PY
 )
     module_files_json=${module_files_json//$'\n'/}
-    module_entries+=("$module::$module_files_json")
+    
+    # Extract type from metadata.json
+    module_metadata_path="$script_dir/$module/metadata.json"
+    module_type=$(python3 - "$module_metadata_path" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r") as f:
+        metadata = json.load(f)
+        print(metadata.get("type", ""))
+except (FileNotFoundError, json.JSONDecodeError, KeyError):
+    print("")
+PY
+)
+    module_entries+=("$module::$module_type::$module_files_json")
 
     # -RLf dereferences nix store symlinks and avoids preserving ownership to prevent permission issues when overwriting
     cp -RLf "$module_lib_dir"/. "$libraries_dir"/
@@ -93,7 +108,16 @@ for item in data:
 for raw in entries:
     if "::" not in raw:
         continue
-    name, files_json = raw.split("::", 1)
+    parts = raw.split("::", 2)
+    if len(parts) == 2:
+        # Old format without type (backward compatibility)
+        name, files_json = parts
+        module_type = ""
+    elif len(parts) == 3:
+        # New format with type
+        name, module_type, files_json = parts
+    else:
+        continue
     try:
         files = json.loads(files_json)
     except json.JSONDecodeError:
@@ -106,6 +130,8 @@ for raw in entries:
         files_map = dict(files_map)  # copy so we don't mutate loaded data directly
     files_map[platform] = files
     item["files"] = files_map
+    if module_type:
+        item["type"] = module_type
     index[name] = item
 
 result = [index[k] for k in sorted(index)]
