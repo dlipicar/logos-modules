@@ -56,21 +56,37 @@ PY
 )
     module_files_json=${module_files_json//$'\n'/}
     
-    # Extract type from metadata.json
+    # Extract metadata from metadata.json
     module_metadata_path="$script_dir/$module/metadata.json"
-    module_type=$(python3 - "$module_metadata_path" <<'PY'
+    module_metadata_json=$(python3 - "$module_metadata_path" <<'PY'
 import json
 import sys
 
 try:
     with open(sys.argv[1], "r") as f:
         metadata = json.load(f)
-        print(metadata.get("type", ""))
+        result = {
+            "type": metadata.get("type", ""),
+            "name": metadata.get("name", ""),
+            "description": metadata.get("description", ""),
+            "dependencies": metadata.get("dependencies", []),
+            "category": metadata.get("category", ""),
+            "author": metadata.get("author", "")
+        }
+        print(json.dumps(result))
 except (FileNotFoundError, json.JSONDecodeError, KeyError):
-    print("")
+    print(json.dumps({
+        "type": "",
+        "name": "",
+        "description": "",
+        "dependencies": [],
+        "category": "",
+        "author": ""
+    }))
 PY
 )
-    module_entries+=("$module::$module_type::$module_files_json")
+    module_metadata_json=${module_metadata_json//$'\n'/}
+    module_entries+=("$module::$module_metadata_json::$module_files_json")
 
     # -RLf dereferences nix store symlinks and avoids preserving ownership to prevent permission issues when overwriting
     cp -RLf "$module_lib_dir"/. "$libraries_dir"/
@@ -110,12 +126,16 @@ for raw in entries:
         continue
     parts = raw.split("::", 2)
     if len(parts) == 2:
-        # Old format without type (backward compatibility)
+        # Old format without metadata (backward compatibility)
         name, files_json = parts
-        module_type = ""
+        metadata = {}
     elif len(parts) == 3:
-        # New format with type
-        name, module_type, files_json = parts
+        # New format with metadata
+        name, metadata_json, files_json = parts
+        try:
+            metadata = json.loads(metadata_json)
+        except json.JSONDecodeError:
+            metadata = {}
     else:
         continue
     try:
@@ -130,8 +150,19 @@ for raw in entries:
         files_map = dict(files_map)  # copy so we don't mutate loaded data directly
     files_map[platform] = files
     item["files"] = files_map
-    if module_type:
-        item["type"] = module_type
+    # Update metadata fields from metadata.json
+    if "type" in metadata:
+        item["type"] = metadata["type"]
+    if "name" in metadata:
+        item["moduleName"] = metadata["name"]
+    if "description" in metadata:
+        item["description"] = metadata["description"]
+    if "dependencies" in metadata:
+        item["dependencies"] = metadata["dependencies"]
+    if "category" in metadata:
+        item["category"] = metadata["category"]
+    if "author" in metadata:
+        item["author"] = metadata["author"]
     index[name] = item
 
 result = [index[k] for k in sorted(index)]
