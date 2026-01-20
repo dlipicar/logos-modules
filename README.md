@@ -25,3 +25,9 @@ to compile all modules in one go
 | logos-wallet-ui | https://github.com/logos-co/logos-wallet-ui |
 | logos-chat-ui | https://github.com/logos-co/logos-chat-ui |
 | logos-accounts-ui | https://github.com/logos-co/logos-accounts-ui |
+
+## Requirements
+
+- Modules must support compiling with `nix build '.#lib'`
+- Modules output must go into `result/lib/*`
+- Modules must have a `metadata.json`. If there are multiple files then the `main` field must be defined.
