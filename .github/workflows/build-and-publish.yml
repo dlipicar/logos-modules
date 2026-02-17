@@ -84,6 +84,38 @@ jobs:
           export ARTIFACTS_DIR="artifacts"
           bash ci/package-modules.sh
 
+      - name: Generate release table
+        id: table
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+
+          with open("output/list.json") as f:
+              modules = json.load(f)
+
+          all_variants = ["linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"]
+          header = "| Module | " + " | ".join(all_variants) + " |"
+          sep = "|--------|" + "|".join([":---:" for _ in all_variants]) + "|"
+
+          rows = []
+          for m in modules:
+              name = m.get("moduleName", m.get("name", ""))
+              version = m.get("version", "")
+              label = f"{name} v{version}" if version else name
+              variants = set(m.get("variants", []))
+              cells = " | ".join("\u2705" if v in variants else "\u274c" for v in all_variants)
+              rows.append(f"| {label} | {cells} |")
+
+          table = "\n".join([header, sep] + rows)
+
+          # Use multiline output
+          import os
+          delim = "EOF_TABLE"
+          print(f"table<<{delim}")
+          print(table)
+          print(delim)
+          PY
+
       - name: Prepare release tag
         id: tag
         run: |
@@ -99,7 +131,12 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: ${{ steps.tag.outputs.name }}
-          body: "Automated build from ${{ github.sha }}"
+          body: |
+            Automated build from ${{ github.sha }}
+
+            ## Module Availability
+
+            ${{ steps.table.outputs.table }}
           files: |
             output/*.lgx
             output/list.json

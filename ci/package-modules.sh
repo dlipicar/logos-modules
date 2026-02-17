@@ -153,8 +153,9 @@ PY
     echo "Successfully added variant $variant to ${package_name}.lgx"
   done
 
-  # Store entry for list.json generation
-  module_entries+=("$module::$module_metadata_json::${package_name}.lgx")
+  # Store entry for list.json generation (variants as comma-separated list)
+  variants_csv=$(IFS=,; echo "${available_variants[*]}")
+  module_entries+=("$module::$module_metadata_json::${package_name}.lgx::${variants_csv}")
 done
 
 # Generate list.json
@@ -173,11 +174,13 @@ result_index = {}
 for raw in entries:
     if "::" not in raw:
         continue
-    parts = raw.split("::", 2)
-    if len(parts) != 3:
+    parts = raw.split("::", 3)
+    if len(parts) < 3:
         continue
 
-    name, metadata_json, package_filename = parts
+    name, metadata_json, package_filename = parts[0], parts[1], parts[2]
+    variants_csv = parts[3] if len(parts) > 3 else ""
+
     try:
         metadata = json.loads(metadata_json)
     except json.JSONDecodeError:
@@ -198,6 +201,10 @@ for raw in entries:
         item["category"] = metadata["category"]
     if "author" in metadata:
         item["author"] = metadata["author"]
+    if metadata.get("version"):
+        item["version"] = metadata["version"]
+    if variants_csv:
+        item["variants"] = [v for v in variants_csv.split(",") if v]
 
     result_index[name] = item
 
