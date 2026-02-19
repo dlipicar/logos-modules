@@ -76,7 +76,7 @@ jobs:
         id: build
         run: |
           cd "${{ matrix.module }}"
-          nix bundle --bundler github:logos-co/nix-bundle-dir#permissive -o result .#lib
+          nix bundle --bundler github:logos-co/nix-bundle-dir#qtPlugin -o result .#lib
 
       - name: Collect output
         if: steps.build.outcome == 'success'
