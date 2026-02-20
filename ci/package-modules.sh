@@ -2,16 +2,18 @@
 set -euo pipefail
 set -x
 
-# package-modules.sh — Create multi-variant .lgx packages from pre-built artifacts.
+# package-modules.sh — Merge single-variant .lgx packages into multi-variant ones.
 #
 # Expected environment:
-#   LGX          — path to the lgx binary
+#   LGX           — path to the lgx binary
 #   ARTIFACTS_DIR — path to downloaded artifacts (default: "artifacts")
 #
 # Expected directory layout under ARTIFACTS_DIR:
-#   build-linux-amd64/<module>/lib/...
-#   build-linux-arm64/<module>/lib/...
-#   build-darwin-arm64/<module>/lib/...
+#   <variant>/<module>/<package>.lgx
+#
+# Each input .lgx is a single-variant package produced by nix-bundle-lgx.
+# This script verifies that manifests match across variants, then uses the lgx
+# tool to create a fresh multi-variant package from the extracted per-platform files.
 #
 # Module metadata is read from <module>/metadata.json in the repo checkout.
 
@@ -44,30 +46,88 @@ module_entries=()
 for module in $modules; do
   echo "=== Processing $module ==="
 
-  # Check which variants have build output for this module
+  # Collect all single-variant lgx files for this module
+  declare -A variant_lgx_map=()
   available_variants=()
+
   for variant in "${ALL_VARIANTS[@]}"; do
-    variant_lib_dir="$ARTIFACTS_DIR/build-${variant}/${module}/lib"
-    if [[ -d "$variant_lib_dir" ]] && [[ -n "$(ls -A "$variant_lib_dir" 2>/dev/null)" ]]; then
-      available_variants+=("$variant")
+    variant_module_dir="$ARTIFACTS_DIR/${variant}/${module}"
+    if [[ -d "$variant_module_dir" ]]; then
+      lgx_file=$(find "$variant_module_dir" -maxdepth 1 -name '*.lgx' 2>/dev/null | head -n 1)
+      if [[ -n "$lgx_file" ]]; then
+        variant_lgx_map["$variant"]="$lgx_file"
+        available_variants+=("$variant")
+      fi
     fi
   done
 
   if [[ ${#available_variants[@]} -eq 0 ]]; then
-    echo "No build output found for $module in any variant, skipping."
+    echo "No lgx artifacts found for $module, skipping."
     continue
   fi
 
   echo "Available variants for $module: ${available_variants[*]}"
 
-  # Read metadata
-  module_metadata_path="$repo_dir/$module/metadata.json"
-  module_metadata_json=$(python3 - "$module_metadata_path" <<'PY'
-import json
-import sys
+  # Get package name from the first lgx filename
+  first_lgx="${variant_lgx_map[${available_variants[0]}]}"
+  package_name=$(basename "$first_lgx" .lgx)
+  lgx_package_path="$output_dir/${package_name}.lgx"
 
+  # --- Verify manifests match across all single-variant lgx files ---
+  lgx_file_args=()
+  for variant in "${available_variants[@]}"; do
+    lgx_file_args+=("${variant_lgx_map[$variant]}")
+  done
+
+  python3 - "${lgx_file_args[@]}" <<'PY'
+import tarfile, json, sys
+
+def read_manifest(lgx_path):
+    with tarfile.open(lgx_path, 'r:gz') as tar:
+        for member in tar.getmembers():
+            if member.name == 'manifest.json':
+                return json.loads(tar.extractfile(member).read())
+    return None
+
+manifests = []
+for path in sys.argv[1:]:
+    m = read_manifest(path)
+    if m is None:
+        print(f"ERROR: no manifest.json found in {path}", file=sys.stderr)
+        sys.exit(1)
+    manifests.append((path, m))
+
+# Compare all manifests ignoring the "variants" field
+def manifest_without_main(m):
+    return {k: v for k, v in m.items() if k != "main"}
+
+reference_path, reference = manifests[0]
+ref_comparable = manifest_without_main(reference)
+
+for path, m in manifests[1:]:
+    comparable = manifest_without_main(m)
+    if comparable != ref_comparable:
+        print(f"ERROR: manifest mismatch between {reference_path} and {path}", file=sys.stderr)
+        print(f"  Reference: {json.dumps(ref_comparable, sort_keys=True)}", file=sys.stderr)
+        print(f"  Mismatch:  {json.dumps(comparable, sort_keys=True)}", file=sys.stderr)
+        sys.exit(1)
+
+print(f"Manifests verified: all {len(manifests)} variant(s) match (ignoring main field).")
+PY
+
+  # --- Create multi-variant lgx package using the lgx tool ---
+
+  # Create a fresh lgx package
+  rm -f "${package_name}.lgx"
+  "$LGX" create "$package_name"
+  mv "${package_name}.lgx" "$lgx_package_path"
+
+  # Patch manifest with module metadata (from the repo checkout)
+  module_metadata_path="$repo_dir/$module/metadata.json"
+  module_metadata_json=$(python3 - "$module_metadata_path" <<'PYMD'
+import json, sys
 try:
-    with open(sys.argv[1], "r") as f:
+    with open(sys.argv[1]) as f:
         metadata = json.load(f)
         result = {
             "type": metadata.get("type", ""),
@@ -91,42 +151,17 @@ except (FileNotFoundError, json.JSONDecodeError, KeyError):
         "version": "0.0.1",
         "main": ""
     }))
-PY
+PYMD
 )
   module_metadata_json=${module_metadata_json//$'\n'/}
 
-  package_name=$(echo "$module_metadata_json" | python3 -c "import json, sys; print(json.load(sys.stdin).get('name', ''))")
-
-  if [[ -z "$package_name" ]]; then
-    echo "No package name found in metadata.json for $module, skipping." >&2
-    continue
-  fi
-
-  lgx_package_path="$output_dir/${package_name}.lgx"
-
-  # Create a fresh LGX package
-  echo "Creating new LGX package: ${package_name}.lgx"
-  rm -f "${package_name}.lgx"
-
-  "$LGX" create "$package_name" || {
-    echo "Failed to create LGX package for $package_name" >&2
-    exit 1
-  }
-
-  mv "${package_name}.lgx" "$lgx_package_path"
-
-  # Patch manifest.json inside the LGX package with module metadata
   echo "Updating package manifest with metadata..."
   python3 - "$lgx_package_path" "$module_metadata_json" <<'PY'
-import json
-import sys
-import tarfile
-import io
+import json, sys, tarfile, io
 
 lgx_path = sys.argv[1]
 metadata = json.loads(sys.argv[2])
 
-# Read all members from the original archive
 with tarfile.open(lgx_path, 'r:gz') as tar:
     members = []
     for member in tar.getmembers():
@@ -135,7 +170,6 @@ with tarfile.open(lgx_path, 'r:gz') as tar:
         else:
             members.append((member, None))
 
-# Patch the manifest content
 patched = []
 for member, data in members:
     if member.name == 'manifest.json':
@@ -147,7 +181,6 @@ for member, data in members:
         member.size = len(data)
     patched.append((member, data))
 
-# Rewrite the archive preserving original member metadata
 with tarfile.open(lgx_path, 'w:gz', format=tarfile.GNU_FORMAT) as tar:
     for member, data in patched:
         if data is not None:
@@ -159,41 +192,71 @@ PY
   # Get main entry from metadata
   main_entry=$(echo "$module_metadata_json" | python3 -c "import json, sys; print(json.load(sys.stdin).get('main', ''))")
 
-  # Add each available variant
+  # Add each variant by extracting files from its single-variant lgx
   for variant in "${available_variants[@]}"; do
-    variant_lib_dir="$ARTIFACTS_DIR/build-${variant}/${module}/lib"
+    lgx_file="${variant_lgx_map[$variant]}"
 
+    # Extract variant files from the single-variant lgx into a temp directory
+    extract_dir=$(mktemp -d)
+    python3 - "$lgx_file" "$variant" "$extract_dir" <<'PY'
+import tarfile, sys, os
+
+lgx_path = sys.argv[1]
+variant = sys.argv[2]
+extract_dir = sys.argv[3]
+
+prefix = f"variants/{variant}/"
+
+with tarfile.open(lgx_path, 'r:gz') as tar:
+    for member in tar.getmembers():
+        if member.name.startswith(prefix) and member.isfile():
+            rel = member.name[len(prefix):]
+            target = os.path.join(extract_dir, rel)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with tar.extractfile(member) as src:
+                with open(target, 'wb') as dst:
+                    dst.write(src.read())
+PY
+
+    # Determine main file for this variant
     if [[ -n "$main_entry" ]]; then
-      # Determine extension based on variant platform
       case "$variant" in
         darwin-*) lib_ext=".dylib" ;;
         linux-*)  lib_ext=".so" ;;
       esac
-      main_path="${main_entry}${lib_ext}"
-    else
-      # Fallback: use first file in library directory
-      main_file=$(ls "$variant_lib_dir" | head -n 1)
-      if [[ -z "$main_file" ]]; then
-        echo "No library files found in $variant_lib_dir" >&2
-        exit 1
+      if [[ -f "$extract_dir/${main_entry}${lib_ext}" ]]; then
+        main_path="${main_entry}${lib_ext}"
+      elif [[ -f "$extract_dir/${main_entry}" ]]; then
+        main_path="${main_entry}"
+      else
+        main_path=$(ls "$extract_dir" | head -n 1)
+        echo "Warning: main entry '$main_entry' not found for $variant, falling back to $main_path"
       fi
-      main_path="$main_file"
+    else
+      main_path=$(ls "$extract_dir" | head -n 1)
     fi
 
-    echo "Adding variant $variant to ${package_name}.lgx"
+    if [[ -z "$main_path" ]]; then
+      echo "No files found in extracted variant $variant for $module" >&2
+      rm -rf "$extract_dir"
+      continue
+    fi
+
+    echo "Adding variant $variant to ${package_name}.lgx (main: $main_path)"
     "$LGX" add "$lgx_package_path" \
       --variant "$variant" \
-      --files "$variant_lib_dir/." \
+      --files "$extract_dir/." \
       --main "$main_path" \
       -y || {
       echo "Failed to add variant $variant to LGX package for $package_name" >&2
       exit 1
     }
 
+    rm -rf "$extract_dir"
     echo "Successfully added variant $variant to ${package_name}.lgx"
   done
 
-  # Store entry for list.json generation (variants as comma-separated list)
+  # Store entry for list.json generation
   variants_csv=$(IFS=,; echo "${available_variants[*]}")
   module_entries+=("$module::$module_metadata_json::${package_name}.lgx::${variants_csv}")
 done
@@ -202,9 +265,7 @@ done
 list_json_path="$output_dir/list.json"
 
 python3 - "$list_json_path" "${module_entries[@]}" <<'PY'
-import json
-import os
-import sys
+import json, os, sys
 
 list_path = sys.argv[1]
 entries = sys.argv[2:]

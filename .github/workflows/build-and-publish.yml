@@ -76,19 +76,19 @@ jobs:
         id: build
         run: |
           cd "${{ matrix.module }}"
-          nix bundle --bundler github:logos-co/nix-bundle-dir#qtPlugin -o result .#lib
+          nix bundle --bundler github:logos-co/nix-bundle-lgx#portable -o result .#lib
 
       - name: Collect output
         if: steps.build.outcome == 'success'
         run: |
-          mkdir -p "build-output/build-${{ matrix.variant.name }}/${{ matrix.module }}"
-          cp -rL "${{ matrix.module }}/result/." "build-output/build-${{ matrix.variant.name }}/${{ matrix.module }}/"
+          mkdir -p "lgx-output/${{ matrix.variant.name }}/${{ matrix.module }}"
+          cp "${{ matrix.module }}"/result/*.lgx "lgx-output/${{ matrix.variant.name }}/${{ matrix.module }}/"
 
       - uses: actions/upload-artifact@v6
         if: steps.build.outcome == 'success'
         with:
-          name: build-${{ matrix.variant.name }}--${{ matrix.module }}
-          path: build-output/
+          name: lgx-${{ matrix.variant.name }}--${{ matrix.module }}
+          path: lgx-output/
           retention-days: 1
 
   package:
@@ -113,7 +113,7 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           path: artifacts
-          pattern: build-*
+          pattern: lgx-*
           merge-multiple: true
 
       - name: Package modules
